@@ -1,0 +1,48 @@
+name: Compilar APK desde el zip
+on:
+  push:
+    paths: ['*.zip', '**/*.zip']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extraer el zip
+        run: |
+          ZIP=$(find . -name '*.zip' -not -path './.git/*' | head -1)
+          [ -n "$ZIP" ] || { echo "No hay ningún .zip en el repo"; exit 1; }
+          echo "Zip: $ZIP"
+          mkdir -p /tmp/src && unzip -q "$ZIP" -d /tmp/src
+          S=$(find /tmp/src \( -name settings.gradle.kts -o -name settings.gradle \) | head -1)
+          [ -n "$S" ] || { echo "El zip no tiene un proyecto Gradle"; exit 1; }
+          echo "ROOT=$(dirname "$S")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+
+      - uses: gradle/actions/setup-gradle@v3
+        with: { gradle-version: 8.7 }
+
+      - name: Compilar
+        working-directory: ${{ env.ROOT }}
+        run: gradle assembleDebug --no-daemon
+
+      - name: Juntar el APK
+        run: |
+          APK=$(find "$ROOT" -path '*outputs/apk*' -name '*.apk' | head -1)
+          [ -n "$APK" ] || { echo "No se generó el APK"; exit 1; }
+          cp "$APK" /tmp/AudioRouter.apk
+
+      - uses: actions/upload-artifact@v4
+        with: { name: AudioRouter-apk, path: /tmp/AudioRouter.apk }
+
+      - name: Publicar en Releases (para bajarlo directo desde el celu)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "apk-${{ github.run_number }}" /tmp/AudioRouter.apk \
+            --title "AudioRouter #${{ github.run_number }}" --notes "APK compilado automáticamente"
